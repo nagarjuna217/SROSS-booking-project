@@ -27,3 +27,27 @@ class BookingSummarySerializer(serializers.Serializer):
     held = serializers.IntegerField()
     available = serializers.IntegerField()
     as_of = serializers.DateTimeField()
+
+
+class HoldRequestSerializer(serializers.Serializer):
+    seat_id = serializers.IntegerField(min_value=1)
+
+
+class ReservationSerializer(serializers.Serializer):
+    id = serializers.UUIDField()
+    showtime_id = serializers.IntegerField()
+    seat = serializers.SerializerMethodField()
+    user_id = serializers.CharField()
+    status = serializers.SerializerMethodField()
+    hold_expires_at = serializers.DateTimeField()
+    confirmed_at = serializers.DateTimeField(allow_null=True)
+    cancelled_at = serializers.DateTimeField(allow_null=True)
+    created_at = serializers.DateTimeField()
+
+    def get_seat(self, obj):
+        return {"id": obj.seat.id, "row": obj.seat.row, "number": obj.seat.number, "label": obj.seat.label}
+
+    def get_status(self, obj):
+        # A HELD row past its expiry is reported as EXPIRED even if the
+        # cleanup command hasn't persisted that yet.
+        return obj.effective_status()

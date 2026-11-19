@@ -83,6 +83,8 @@ STATIC_ROOT = BASE_DIR / "staticfiles"
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
+HOLD_DURATION_SECONDS = int(os.environ.get("HOLD_DURATION_SECONDS", "120"))
+
 REST_FRAMEWORK = {
     # No auth system in scope; callers identify themselves with X-User-Id.
     "DEFAULT_AUTHENTICATION_CLASSES": [],
