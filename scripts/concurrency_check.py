@@ -20,7 +20,9 @@ actually processed in parallel.
 
 Standard library only:
 
-    python scripts/concurrency_check.py --base-url http://localhost:8000 --showtime 1 -n 20
+    python scripts/concurrency_check.py --base-url http://localhost:8000 -n 20
+
+--showtime defaults to the next showtime that hasn't started yet.
 """
 import argparse
 import json
@@ -30,6 +32,7 @@ import time
 import uuid
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime
 from urllib import error, request
 
 
@@ -63,6 +66,18 @@ def fire_together(jobs):
     return [r for r, _ in results], spread_ms
 
 
+def pick_upcoming_showtime(api: str) -> int:
+    status, _, showtimes = call("GET", f"{api}/showtimes/")
+    if status != 200:
+        sys.exit(f"Could not list showtimes ({status}): {showtimes}")
+    now = time.time()
+    for show in showtimes:  # API returns them ordered by start time
+        starts = datetime.fromisoformat(show["starts_at"].replace("Z", "+00:00")).timestamp()
+        if starts > now + 60:
+            return show["id"]
+    sys.exit("No upcoming showtime found. Run: python manage.py seed_demo")
+
+
 def error_code(payload):
     return (payload or {}).get("error", {}).get("code")
 
@@ -80,7 +95,7 @@ class Check:
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--base-url", default="http://localhost:8000")
-    parser.add_argument("--showtime", type=int, default=1)
+    parser.add_argument("--showtime", type=int, help="Showtime id (default: next upcoming one)")
     parser.add_argument("-n", "--concurrency", type=int, default=20)
     args = parser.parse_args()
 
@@ -88,6 +103,10 @@ def main():
     n = args.concurrency
     run_id = uuid.uuid4().hex[:6]  # keeps user ids unique across runs
     check = Check()
+
+    if args.showtime is None:
+        args.showtime = pick_upcoming_showtime(api)
+    print(f"Using showtime {args.showtime}, concurrency {n}")
 
     status, _, data = call("GET", f"{api}/showtimes/{args.showtime}/seats/?status=available")
     if status != 200:
