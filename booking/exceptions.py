@@ -113,7 +113,7 @@ def api_exception_handler(exc, context):
         return Response(exc.as_payload(), status=exc.status_code)
 
     if isinstance(exc, ValidationError):
-        return _error_response(400, "validation_error", "Request body is invalid.", details=exc.detail)
+        return _error_response(400, "validation_error", "Request is invalid.", details=exc.detail)
 
     if isinstance(exc, Http404):
         return _error_response(404, "not_found", "Resource not found.")
