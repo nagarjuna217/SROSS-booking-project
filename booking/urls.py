@@ -8,4 +8,14 @@ urlpatterns = [
     path("showtimes/<int:showtime_id>/summary/", views.ShowtimeSummaryView.as_view(), name="showtime-summary"),
     path("showtimes/<int:showtime_id>/holds/", views.HoldCreateView.as_view(), name="showtime-holds"),
     path("reservations/<uuid:reservation_id>/", views.ReservationDetailView.as_view(), name="reservation-detail"),
+    path(
+        "reservations/<uuid:reservation_id>/confirm/",
+        views.ReservationConfirmView.as_view(),
+        name="reservation-confirm",
+    ),
+    path(
+        "reservations/<uuid:reservation_id>/cancel/",
+        views.ReservationCancelView.as_view(),
+        name="reservation-cancel",
+    ),
 ]

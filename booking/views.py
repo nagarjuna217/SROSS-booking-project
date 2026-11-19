@@ -78,3 +78,25 @@ class ReservationDetailView(APIView):
     def get(self, request, reservation_id):
         reservation = services.get_reservation_for_user(reservation_id, get_user_id(request))
         return Response(ReservationSerializer(reservation).data)
+
+
+class ReservationConfirmView(APIView):
+    def post(self, request, reservation_id):
+        reservation, changed = services.confirm_reservation(reservation_id, get_user_id(request))
+        # Same status and body on a retry; the header is only a hint for
+        # clients/logs that this call was a replay.
+        return Response(
+            ReservationSerializer(reservation).data,
+            status=status.HTTP_200_OK,
+            headers={"Idempotent-Replay": "false" if changed else "true"},
+        )
+
+
+class ReservationCancelView(APIView):
+    def post(self, request, reservation_id):
+        reservation, changed = services.cancel_reservation(reservation_id, get_user_id(request))
+        return Response(
+            ReservationSerializer(reservation).data,
+            status=status.HTTP_200_OK,
+            headers={"Idempotent-Replay": "false" if changed else "true"},
+        )

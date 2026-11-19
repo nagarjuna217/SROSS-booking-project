@@ -14,6 +14,8 @@ from django.db.models import Count, Q
 from django.utils import timezone
 
 from .exceptions import (
+    HoldExpired,
+    InvalidReservationState,
     ReservationNotFound,
     ReservationNotOwned,
     SeatNotFound,
@@ -195,4 +197,100 @@ def hold_seat(showtime_id: int, seat_id: int, user_id: str) -> tuple[Reservation
                 raise UserAlreadyHoldingSeat()
             raise SeatUnavailable(seat_id=seat.id, seat=seat.label)
 
+    return reservation, True
+
+
+def _lock_reservation_for_user(reservation_id, user_id: str) -> Reservation:
+    """
+    Fetch and row-lock a reservation, checking ownership. Must be called
+    inside a transaction.
+
+    `of=("self",)` keeps the lock on the reservation row only; without it
+    Postgres would also lock the joined seat and showtime rows and we'd be
+    contending with every hold attempt on that seat.
+    """
+    try:
+        reservation = (
+            Reservation.objects.select_for_update(of=("self",))
+            .select_related("seat", "showtime")
+            .get(pk=reservation_id)
+        )
+    except Reservation.DoesNotExist:
+        raise ReservationNotFound(reservation_id=str(reservation_id))
+    if reservation.user_id != user_id:
+        raise ReservationNotOwned(reservation_id=str(reservation_id))
+    return reservation
+
+
+def _hold_expired_error(reservation: Reservation) -> HoldExpired:
+    return HoldExpired(
+        reservation_id=str(reservation.id),
+        expired_at=reservation.hold_expires_at.isoformat(),
+        seat={"id": reservation.seat.id, "label": reservation.seat.label},
+    )
+
+
+def confirm_reservation(reservation_id, user_id: str) -> tuple[Reservation, bool]:
+    """
+    Turn an open hold into a booking. Returns (reservation, changed).
+
+    Idempotent by design: the reservation id *is* the idempotency key. If
+    the client's first confirm succeeded but the response was lost, the retry
+    finds the row already CONFIRMED by the same user and gets the same 200
+    body back (changed=False). There is no second row to create, so a
+    duplicate booking is impossible.
+
+    The row lock serialises confirm against the hold path recycling this
+    hold after expiry: whichever commits first wins, and the other sees the
+    final state (CONFIRMED -> seat stays booked; EXPIRED -> 410).
+    """
+    with transaction.atomic():
+        reservation = _lock_reservation_for_user(reservation_id, user_id)
+        now = timezone.now()
+
+        if reservation.status == Reservation.Status.CONFIRMED:
+            return reservation, False
+        if reservation.status == Reservation.Status.CANCELLED:
+            raise InvalidReservationState(
+                "Reservation was cancelled and can't be confirmed.",
+                reservation_id=str(reservation.id),
+                status=reservation.status,
+            )
+        if reservation.is_hold_expired(now):
+            raise _hold_expired_error(reservation)
+
+        reservation.status = Reservation.Status.CONFIRMED
+        reservation.confirmed_at = now
+        reservation.save(update_fields=["status", "confirmed_at", "updated_at"])
+    return reservation, True
+
+
+def cancel_reservation(reservation_id, user_id: str) -> tuple[Reservation, bool]:
+    """
+    Cancel a booking (or release an open hold early). Returns
+    (reservation, changed). The seat is available again as soon as this
+    commits; see DECISIONS.md #3.
+
+    Also idempotent: cancelling an already-cancelled reservation returns it
+    unchanged.
+    """
+    with transaction.atomic():
+        reservation = _lock_reservation_for_user(reservation_id, user_id)
+        now = timezone.now()
+
+        if reservation.status == Reservation.Status.CANCELLED:
+            return reservation, False
+        if reservation.is_hold_expired(now):
+            # Nothing to release; the seat already went back to the pool.
+            raise _hold_expired_error(reservation)
+        if reservation.showtime.has_started(now):
+            raise ShowtimeStarted(
+                "Reservations can't be cancelled after the showtime has started.",
+                showtime_id=reservation.showtime_id,
+                starts_at=reservation.showtime.starts_at.isoformat(),
+            )
+
+        reservation.status = Reservation.Status.CANCELLED
+        reservation.cancelled_at = now
+        reservation.save(update_fields=["status", "cancelled_at", "updated_at"])
     return reservation, True
